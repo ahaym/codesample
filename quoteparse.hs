@@ -11,7 +11,6 @@ import qualified Data.ByteString.Char8 as C
 
 qstart = CL.pack "B6034"
 delayUs = 3000000
-delayMs = 3000
 
 data PacketContents = NotQuote | QuotePacket {
     issueCode :: String,
@@ -173,13 +172,19 @@ printUnsorted hdr bytes = do
     NotQuote -> return ()
     _ -> print quote
 
+runUnsorted :: PcapHandle -> IO ()
+runUnsorted handle = do dispatchBS handle (-1) printUnsorted
+                        return ()
+
+runSorted :: PcapHandle -> IO ()
+runSorted handle = putStrLn "The Sorted Output" 
+
 main = do
   args <- getArgs
   let rflag = "-r" `elem` args
   case filter ("-r"/=) args of
     [] -> error "too few arguments!"
-    [h] -> if rflag then putStrLn "Fuck"
-              else do p <- openOffline h 
-                      dispatchBS p (-1) printUnsorted
-                      return ()
+    [file] -> do handle <- openOffline file
+                 if rflag then runSorted handle
+                 else runUnsorted handle
     _ -> error "too many arguments!"
