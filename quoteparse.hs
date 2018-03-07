@@ -14,37 +14,11 @@ delayUs = 3000000
 
 data PacketContents = NotQuote | QuotePacket {
     issueCode :: String,
-
-    bid1 :: String,
-    bq1 :: String,
-
-    bid2 :: String,
-    bq2 :: String,
-
-    bid3 :: String,
-    bq3 :: String,
-
-    bid4 :: String,
-    bq4 :: String,
-
-    bid5 :: String,
-    bq5 :: String,
-
-    ask1 :: String,
-    aq1 :: String,
-
-    ask2 :: String,
-    aq2 :: String,
-
-    ask3 :: String,
-    aq3 :: String,
-
-    ask4 :: String,
-    aq4 :: String,
-
-    ask5 :: String,
-    aq5 :: String,
-
+    --would alias the five-string tuple but ran into invalid test error
+    bprice :: (String, String, String, String, String), 
+    bqty :: (String, String, String, String, String),
+    aprice :: (String, String, String, String, String),
+    aqty :: (String, String, String, String, String),
     pktTime :: Word32,
     acceptTime :: Word32
     }
@@ -53,26 +27,10 @@ instance Show PacketContents where
   show NotQuote = "NotQuote"
   show QuotePacket{
     issueCode = issueCode,
-    bid1 = bid1,
-    bq1 =  bq1,
-    bid2 = bid2,
-    bq2 = bq2,
-    bid3 = bid3,
-    bq3 = bq3,
-    bid4 = bid4,
-    bq4 = bq4,
-    bid5 = bid5,
-    bq5 = bq5,
-    ask1 = ask1,
-    aq1 = aq1,
-    ask2 = ask2,
-    aq2 = aq2,
-    ask3 = ask3,
-    aq3 = aq3,
-    ask4 = ask4,
-    aq4 = aq4,
-    ask5 = ask5,
-    aq5 = aq5,
+    bprice = (bid1, bid2, bid3, bid4, bid5),
+    bqty = (bq1, bq2, bq3, bq4, bq5),
+    aprice = (ask1, ask2, ask3, ask4, ask5),
+    aqty = (aq1, aq2, aq3, aq4, aq5),
     pktTime = packtime,
     acceptTime =  acceptTime
 } = printf "%d %d %s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s"
@@ -87,70 +45,47 @@ getQuote packtime = do
   issueCode <- getByteString 12
   skip 12 --3 + 2 + 7
 
-  bid1 <- getByteString 5
-  bq1 <- getByteString 7
-  bid2 <- getByteString 5
-  bq2 <- getByteString 7
-  bid3 <- getByteString 5
-  bq3 <- getByteString 7
-  bid4 <- getByteString 5
-  bq4 <- getByteString 7
-  bid5 <- getByteString 5
-  bq5 <- getByteString 7
+  bid1_ <- getByteString 5
+  bq1_ <- getByteString 7
+  bid2_ <- getByteString 5
+  bq2_ <- getByteString 7
+  bid3_ <- getByteString 5
+  bq3_ <- getByteString 7
+  bid4_ <- getByteString 5
+  bq4_ <- getByteString 7
+  bid5_ <- getByteString 5
+  bq5_ <- getByteString 7
 
   skip 7
 
-  ask1 <- getByteString 5
-  aq1 <- getByteString 7
-  ask2 <- getByteString 5
-  aq2 <- getByteString 7
-  ask3 <- getByteString 5
-  aq3 <- getByteString 7
-  ask4 <- getByteString 5
-  aq4 <- getByteString 7
-  ask5 <- getByteString 5
-  aq5 <- getByteString 7
+  ask1_ <- getByteString 5
+  aq1_ <- getByteString 7
+  ask2_ <- getByteString 5
+  aq2_ <- getByteString 7
+  ask3_ <- getByteString 5
+  aq3_ <- getByteString 7
+  ask4_ <- getByteString 5
+  aq4_ <- getByteString 7
+  ask5_ <- getByteString 5
+  aq5_ <- getByteString 7
   
   skip 50
 
   acceptTime <- getByteString 8
+  
+  let [bid1, bid2, bid3, bid4, bid5] = map C.unpack [bid1_, bid2_, bid3_, bid4_, bid5_]
+      [bq1, bq2, bq3, bq4, bq5] = map C.unpack [bq1_, bq2_, bq3_, bq4_, bq5_]
+      [ask1, ask2, ask3, ask4, ask5] = map C.unpack [ask1_, ask2_, ask3_, ask4_, ask5_]
+      [aq1, aq2, aq3, aq4, aq5] = map C.unpack [aq1_, aq2_, aq3_, aq4_, aq5_]
 
   return QuotePacket {
     issueCode = C.unpack issueCode,
-
-    bid1 = C.unpack bid1,
-    bq1 = C.unpack bq1,
-
-    bid2 = C.unpack bid2,
-    bq2 = C.unpack bq2,
-
-    bid3 = C.unpack bid3,
-    bq3 = C.unpack bq3,
-
-    bid4 = C.unpack bid4,
-    bq4 = C.unpack bq4,
-
-    bid5 = C.unpack bid5,
-    bq5 = C.unpack bq5,
-
-    ask1 = C.unpack ask1,
-    aq1 = C.unpack aq1,
-
-    ask2 = C.unpack ask2,
-    aq2 = C.unpack aq2,
-
-    ask3 = C.unpack ask3,
-    aq3 = C.unpack aq3,
-
-    ask4 = C.unpack ask4,
-    aq4 = C.unpack aq4,
-
-    ask5 = C.unpack ask5,
-    aq5 = C.unpack aq5,
-
     pktTime = packtime,
-    acceptTime = read (C.unpack acceptTime) :: Word32
-
+    acceptTime = read (C.unpack acceptTime) :: Word32,
+    bprice = (bid1, bid2, bid3, bid4, bid5),
+    bqty = (bq1, bq2, bq3, bq4, bq5),
+    aprice = (ask1, ask2, ask3, ask4, ask5),
+    aqty = (aq1, aq2, aq3, aq4, aq5)
     }
 
 parsePacket :: PktHdr -> BL.ByteString -> PacketContents
@@ -160,10 +95,10 @@ parsePacket header bytes
   | otherwise = runGet (getQuote packtime) body
   where
     PktHdr{hdrCaptureLength = packlen, hdrUseconds = packtime} = header
-    (_,body) = BL.splitAt 42 bytes --I have NO idea why a 42 byte split works
-                                   --0 and 16 both spit out a bunch of header
-                                   --May work differently on other platforms?
-                                   --Using 64-bit Linux
+    (_,body) = BL.splitAt 42 bytes --I have no idea why a 42 byte split works
+                                   --0,16,16+24 both spit out a bunch of header
+                                   --May work differently on other systems?
+                                   --Padding issue? Using 64-bit Linux
 
 printUnsorted :: PktHdr -> B.ByteString -> IO ()
 printUnsorted hdr bytes = do
