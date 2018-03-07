@@ -4,24 +4,27 @@ import Data.Binary.Get
 import Control.Monad
 import Data.Word
 import Text.Printf
+import qualified Data.Heap as H
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import qualified Data.ByteString.Lazy.Char8 as CL
 import qualified Data.ByteString.Char8 as C
+import qualified Data.ByteString.Lazy.Char8 as CL
 
 qstart = CL.pack "B6034"
 delayUs = 3000000
+delaySecs = 3
 
 data PacketContents = NotQuote | QuotePacket {
     issueCode :: String,
     --would alias the five-string tuple but ran into invalid test error
+    --making these lists of strings would remove boilerplate, but introduce ambiguity
     bprice :: (String, String, String, String, String), 
     bqty :: (String, String, String, String, String),
     aprice :: (String, String, String, String, String),
     aqty :: (String, String, String, String, String),
     pktTime :: Word32,
     acceptTime :: Word32
-    }
+    } deriving (Eq, Ord)
 
 instance Show PacketContents where
   show NotQuote = "NotQuote"
@@ -94,7 +97,7 @@ parsePacket header bytes
   | BL.take 5 body /= qstart = NotQuote
   | otherwise = runGet (getQuote packtime) body
   where
-    PktHdr{hdrCaptureLength = packlen, hdrUseconds = packtime} = header
+    PktHdr{hdrCaptureLength = packlen, hdrSeconds = packtime} = header
     (_,body) = BL.splitAt 42 bytes --I have no idea why a 42 byte split works
                                    --0,16,16+24 both spit out a bunch of header
                                    --May work differently on other systems?
@@ -107,12 +110,45 @@ printUnsorted hdr bytes = do
     NotQuote -> return ()
     _ -> print quote
 
+type AcceptTime = Word32
+type PackTime = Word32
+type QuoteHeap = H.MinHeap (AcceptTime, PackTime, PacketContents)
+
+printSorted :: PcapHandle -> QuoteHeap -> IO ()
+printSorted handle qh = do
+  (hdr, bytes) <- nextBS handle
+  let quote = parsePacket hdr (CL.fromStrict bytes)
+  if B.null bytes then printRest qh --no more packets, print the whole heap
+    else case quote of
+        NotQuote -> printSorted handle qh
+        QuotePacket{acceptTime=atime, pktTime=ptime} -> do
+          let newEntry = (atime, ptime, quote)
+              newH = H.insert newEntry qh
+          newH' <- printPred ptime newH
+          printSorted handle newH'
+
+--TODO
+third (_, _, x3) = x3
+
+printRest :: QuoteHeap -> IO ()
+--prints the contents of the quoteheap
+printRest qh = mapM_ (print . third) $ H.toAscList qh
+
+printPred :: Word32 -> QuoteHeap -> IO QuoteHeap
+--prints and removes all packets in the queue dated at least 3 seconds earlier
+--should guarantee sorted order without having all packets in memory
+printPred packTime qh = do mapM_ (print . third) safeQuotes
+                           return newHeap
+                        where (safeQuotes, newHeap) = H.span safeToPrint qh
+                              safeToPrint item = packTime - snd item > delaySecs
+                              snd (_, x2, _) = x2
+
 runUnsorted :: PcapHandle -> IO ()
 runUnsorted handle = do dispatchBS handle (-1) printUnsorted
                         return ()
 
 runSorted :: PcapHandle -> IO ()
-runSorted handle = putStrLn "The Sorted Output" 
+runSorted handle = printSorted handle H.empty
 
 main = do
   args <- getArgs
