@@ -3,7 +3,6 @@ import Network.Pcap
 import Data.Binary.Get
 import Control.Monad
 import Data.Word
-import Text.Printf
 import qualified Data.Heap as H
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
