@@ -10,14 +10,14 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy.Char8 as CL
 
-qstart = CL.pack "B6034"
-delayUs = 3000000
-delaySecs = 3
+quoteStart = CL.pack "B6034" --Start of relevant packet messages
+quotePacketSize = 257 --Length of quote packets, from wireshark
+dataOffset = 42 --Distance from start of packet to data, also from wireshark
 
-data PacketContents = NotQuote | QuotePacket {
+delaySecs = 3 --max distance between packet time and quote accept time
+
+data Quote = NotQuote | Quote {
     issueCode :: String,
-    --would alias the five-string tuple but ran into invalid test error
-    --making these lists of strings would remove boilerplate, but introduce ambiguity
     bprice :: (String, String, String, String, String), 
     bqty :: (String, String, String, String, String),
     aprice :: (String, String, String, String, String),
@@ -26,9 +26,9 @@ data PacketContents = NotQuote | QuotePacket {
     acceptTime :: Word32
     } deriving (Eq, Ord)
 
-instance Show PacketContents where
+instance Show Quote where
   show NotQuote = "NotQuote"
-  show QuotePacket{
+  show Quote{
     issueCode = issueCode,
     bprice = (bid1, bid2, bid3, bid4, bid5),
     bqty = (bq1, bq2, bq3, bq4, bq5),
@@ -42,7 +42,7 @@ instance Show PacketContents where
 
 --Extract the quote from the body of the Packet
 --We add in packtime from the pcap header
-getQuote :: Word32 -> Get PacketContents
+getQuote :: Word32 -> Get Quote
 getQuote packtime = do
   skip 5 --B6034
   issueCode <- getByteString 12
@@ -81,7 +81,7 @@ getQuote packtime = do
       [ask1, ask2, ask3, ask4, ask5] = map C.unpack [ask1_, ask2_, ask3_, ask4_, ask5_]
       [aq1, aq2, aq3, aq4, aq5] = map C.unpack [aq1_, aq2_, aq3_, aq4_, aq5_]
 
-  return QuotePacket {
+  return Quote {
     issueCode = C.unpack issueCode,
     pktTime = packtime,
     acceptTime = read (C.unpack acceptTime) :: Word32,
@@ -91,17 +91,14 @@ getQuote packtime = do
     aqty = (aq1, aq2, aq3, aq4, aq5)
     }
 
-parsePacket :: PktHdr -> BL.ByteString -> PacketContents
+parsePacket :: PktHdr -> BL.ByteString -> Quote
 parsePacket header bytes
-  | packlen < 5 = NotQuote 
-  | BL.take 5 body /= qstart = NotQuote
+  | packlen /= quotePacketSize = NotQuote --packet must be the correct size
+  | BL.take 5 body /= quoteStart = NotQuote --packet must start with correct message
   | otherwise = runGet (getQuote packtime) body
   where
     PktHdr{hdrCaptureLength = packlen, hdrSeconds = packtime} = header
-    (_,body) = BL.splitAt 42 bytes --I have no idea why a 42 byte split works
-                                   --0,16,16+24 both spit out a bunch of header
-                                   --May work differently on other systems?
-                                   --Padding issue? Using 64-bit Linux
+    (_,body) = BL.splitAt dataOffset bytes 
 
 printUnsorted :: PktHdr -> B.ByteString -> IO ()
 printUnsorted hdr bytes = do
@@ -112,7 +109,7 @@ printUnsorted hdr bytes = do
 
 type AcceptTime = Word32
 type PackTime = Word32
-type QuoteHeap = H.MinHeap (AcceptTime, PackTime, PacketContents)
+type QuoteHeap = H.MinHeap (AcceptTime, PackTime, Quote)
 
 printSorted :: PcapHandle -> QuoteHeap -> IO ()
 printSorted handle qh = do
@@ -121,13 +118,12 @@ printSorted handle qh = do
   if B.null bytes then printRest qh --no more packets, print the whole heap
     else case quote of
         NotQuote -> printSorted handle qh
-        QuotePacket{acceptTime=atime, pktTime=ptime} -> do
+        Quote{acceptTime=atime, pktTime=ptime} -> do
           let newEntry = (atime, ptime, quote)
               newH = H.insert newEntry qh
           newH' <- printPred ptime newH
           printSorted handle newH'
 
---TODO
 third (_, _, x3) = x3
 
 printRest :: QuoteHeap -> IO ()
@@ -143,13 +139,6 @@ printPred packTime qh = do mapM_ (print . third) safeQuotes
                               safeToPrint item = packTime - snd item > delaySecs
                               snd (_, x2, _) = x2
 
-runUnsorted :: PcapHandle -> IO ()
-runUnsorted handle = do dispatchBS handle (-1) printUnsorted
-                        return ()
-
-runSorted :: PcapHandle -> IO ()
-runSorted handle = printSorted handle H.empty
-
 main = do
   args <- getArgs
   let rflag = "-r" `elem` args
@@ -159,3 +148,5 @@ main = do
                  if rflag then runSorted handle
                  else runUnsorted handle
     _ -> error "too many arguments!"
+  where runUnsorted handle = void $ dispatchBS handle (-1) printUnsorted
+        runSorted handle = printSorted handle H.empty
