@@ -10,119 +10,116 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy.Char8 as CL
 
-quoteStart = CL.pack "B6034" --Start of relevant packet messages
+{-
+ Market Data Feed Parser/Tsuru Capital Code Sample
+ Mark Hay, 2018, mah6@williams.edu
+
+ The general idea, ignoring packet ordering, is straightforward: recieve a packet from
+ the dump file via Network.Pcap, parse its body as a Quote if it has the correct size and 
+ opening bytes,then print it.
+ 
+ When packets must be ordered, a heap is used to take advantage of the fact that packet
+ and accept time are no more than three seconds apart. Instead of printing a packet as
+ soon as it is recieved, the packet (if it is a quote) is inserted in a (functional) heap,
+ ordered by quote accept time, then packet time. After any packet is recieved, the heap is
+ popped and printed until the heap head's time is within three seconds of the newest
+ packet's packet time. Once the last packet is recieved, the remaining heap is then
+ printed. The packets can therefore be printed in sorted order without having more than
+ three seconds' worth of trading data in memory at any given time.
+ -}
+
+quoteStart = C.pack "B6034" --Start of relevant packet messages
 quotePacketSize = 257 --Length of quote packets, from wireshark
 dataOffset = 42 --Distance from start of packet to data, also from wireshark
 
-delaySecs = 3 --max distance between packet time and quote accept time
+delaySecs = 3 --max distance between packet time and quote accept time in seconds
 
-data Quote = NotQuote | Quote {
+data Qp = Qp String String deriving (Eq, Ord) --quantity and price
+instance Show Qp where show (Qp q p) = q ++ "@" ++ p
+
+data Quote = Quote {
     issueCode :: String,
-    bprice :: (String, String, String, String, String), 
-    bqty :: (String, String, String, String, String),
-    aprice :: (String, String, String, String, String),
-    aqty :: (String, String, String, String, String),
+    bids :: (Qp, Qp, Qp, Qp, Qp), 
+    asks :: (Qp, Qp, Qp, Qp, Qp),
     pktTime :: Word32,
     acceptTime :: Word32
     } deriving (Eq, Ord)
 
 instance Show Quote where
-  show NotQuote = "NotQuote"
   show Quote{
     issueCode = issueCode,
-    bprice = (bid1, bid2, bid3, bid4, bid5),
-    bqty = (bq1, bq2, bq3, bq4, bq5),
-    aprice = (ask1, ask2, ask3, ask4, ask5),
-    aqty = (aq1, aq2, aq3, aq4, aq5),
+    bids = bids,
+    asks = asks,
     pktTime = packtime,
     acceptTime =  acceptTime
-} = printf "%d %d %s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s %s@%s"
-      packtime acceptTime issueCode bq5 bid5 bq4 bid4 bq3 bid3 bq2 bid2 bq1 bid1
-      aq1 ask1 aq2 ask2 aq3 ask3 aq4 ask4 aq5 ask5  
+} = unwords [show packtime, show acceptTime, issueCode, printDescQps bids, printAscQps asks]
+    where printAscQps (x1, x2, x3, x4, x5) = unwords $ map show [x1, x2, x3, x4, x5]
+          printDescQps (x1, x2, x3, x4, x5) = unwords $ map show [x5, x4, x3, x2, x1]
 
---Extract the quote from the body of the Packet
+{-
+--prints just the accept times; for checking correctness of -r 
+instance Show Quote where
+  show Quote{acceptTime = acceptTime} = show acceptTime
+-}
+
+--Extract quote from the body of a valid quote Packet
 --We add in packtime from the pcap header
 getQuote :: Word32 -> Get Quote
 getQuote packtime = do
+  let getPriceQuantity = (,) <$> getByteString 5 <*> getByteString 7 
   skip 5 --B6034
   issueCode <- getByteString 12
   skip 12 --3 + 2 + 7
 
-  bid1_ <- getByteString 5
-  bq1_ <- getByteString 7
-  bid2_ <- getByteString 5
-  bq2_ <- getByteString 7
-  bid3_ <- getByteString 5
-  bq3_ <- getByteString 7
-  bid4_ <- getByteString 5
-  bq4_ <- getByteString 7
-  bid5_ <- getByteString 5
-  bq5_ <- getByteString 7
-
+  bids_ <- replicateM 5 getPriceQuantity
   skip 7
-
-  ask1_ <- getByteString 5
-  aq1_ <- getByteString 7
-  ask2_ <- getByteString 5
-  aq2_ <- getByteString 7
-  ask3_ <- getByteString 5
-  aq3_ <- getByteString 7
-  ask4_ <- getByteString 5
-  aq4_ <- getByteString 7
-  ask5_ <- getByteString 5
-  aq5_ <- getByteString 7
+  asks_ <- replicateM 5 getPriceQuantity
   
   skip 50
 
   acceptTime <- getByteString 8
   
-  let [bid1, bid2, bid3, bid4, bid5] = map C.unpack [bid1_, bid2_, bid3_, bid4_, bid5_]
-      [bq1, bq2, bq3, bq4, bq5] = map C.unpack [bq1_, bq2_, bq3_, bq4_, bq5_]
-      [ask1, ask2, ask3, ask4, ask5] = map C.unpack [ask1_, ask2_, ask3_, ask4_, ask5_]
-      [aq1, aq2, aq3, aq4, aq5] = map C.unpack [aq1_, aq2_, aq3_, aq4_, aq5_]
+  let [bid1, bid2, bid3, bid4, bid5] = map unpackQp bids_
+      [ask1, ask2, ask3, ask4, ask5] = map unpackQp asks_
+      unpackQp (p, q) = Qp (C.unpack p) (C.unpack q)
 
   return Quote {
     issueCode = C.unpack issueCode,
     pktTime = packtime,
     acceptTime = read (C.unpack acceptTime) :: Word32,
-    bprice = (bid1, bid2, bid3, bid4, bid5),
-    bqty = (bq1, bq2, bq3, bq4, bq5),
-    aprice = (ask1, ask2, ask3, ask4, ask5),
-    aqty = (aq1, aq2, aq3, aq4, aq5)
+    bids = (bid1, bid2, bid3, bid4, bid5),
+    asks = (ask1, ask2, ask3, ask4, ask5)
     }
 
-parsePacket :: PktHdr -> BL.ByteString -> Quote
+parsePacket :: PktHdr -> B.ByteString -> Maybe Quote
 parsePacket header bytes
-  | packlen /= quotePacketSize = NotQuote --packet must be the correct size
-  | BL.take 5 body /= quoteStart = NotQuote --packet must start with correct message
-  | otherwise = runGet (getQuote packtime) body
+  | packlen /= quotePacketSize = Nothing --packet must be the correct size
+  | B.take 5 body /= quoteStart = Nothing --packet must start with correct message
+  | otherwise = Just $ runGet (getQuote packtime) (CL.fromStrict body) --fromStrict is O(1)
   where
     PktHdr{hdrCaptureLength = packlen, hdrSeconds = packtime} = header
-    (_,body) = BL.splitAt dataOffset bytes 
+    (_,body) = B.splitAt dataOffset bytes
 
 printUnsorted :: PktHdr -> B.ByteString -> IO ()
 printUnsorted hdr bytes = do
-  let quote = parsePacket hdr (CL.fromStrict bytes) --fromStrict is O(1)
-  case quote of
-    NotQuote -> return ()
-    _ -> print quote
+  let packet = parsePacket hdr bytes 
+  forM_ packet print 
 
-type AcceptTime = Word32
-type PackTime = Word32
-type QuoteHeap = H.MinHeap (AcceptTime, PackTime, Quote)
+type QuoteHeap = H.MinHeap (Word32, Word32, Quote) --(Accept Time, Pack Time, Quote)
 
 printSorted :: PcapHandle -> QuoteHeap -> IO ()
 printSorted handle qh = do
   (hdr, bytes) <- nextBS handle
-  let quote = parsePacket hdr (CL.fromStrict bytes)
+  let packet = parsePacket hdr bytes
+      PktHdr{hdrSeconds = packtime} = hdr
   if B.null bytes then printRest qh --no more packets, print the whole heap
-    else case quote of
-        NotQuote -> printSorted handle qh
-        Quote{acceptTime=atime, pktTime=ptime} -> do
-          let newEntry = (atime, ptime, quote)
-              newH = H.insert newEntry qh
-          newH' <- printPred ptime newH
-          printSorted handle newH'
+    else do
+          newH <- printPred packtime qh --print elements 3 seconds younger than packtime
+          case packet of --if the new packet is a quote, add it to the heap
+            Just quote@Quote{acceptTime=atime} ->
+              printSorted handle (H.insert newEntry newH)
+              where newEntry = (atime, packtime, quote)
+            Nothing -> printSorted handle newH
 
 third (_, _, x3) = x3
 
@@ -131,8 +128,8 @@ printRest :: QuoteHeap -> IO ()
 printRest qh = mapM_ (print . third) $ H.toAscList qh
 
 printPred :: Word32 -> QuoteHeap -> IO QuoteHeap
---prints and removes all packets in the queue dated at least 3 seconds earlier
---should guarantee sorted order without having all packets in memory
+--pops and prints all packets in the heap recieved least 3 seconds earlier
+--should guarantee sorted order without needing all packets in memory
 printPred packTime qh = do mapM_ (print . third) safeQuotes
                            return newHeap
                         where (safeQuotes, newHeap) = H.span safeToPrint qh
