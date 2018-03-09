@@ -11,7 +11,7 @@ import qualified Data.ByteString.Lazy.Char8 as CL
 
 {-
  Market Data Feed Parser/Tsuru Capital Code Sample
- Mark Hay, 2018, mah6@williams.edu
+ Mark Hay, 2018, mark.hay@exeter.ox.ac.uk
 
  The general idea, ignoring packet ordering, is straightforward: recieve a packet from
  the dump file via Network.Pcap, parse its body as a Quote if it has the correct size and 
@@ -25,6 +25,13 @@ import qualified Data.ByteString.Lazy.Char8 as CL
  packet's packet time. Once the last packet is recieved, the remaining heap is then
  printed. The packets can therefore be printed in sorted order without having more than
  three seconds' worth of trading data in memory at any given time.
+ 
+ If delaySecs is set to a high number (equivalent to inserting everything, then printing
+ everything,the program has an initial lag before it starts to print; this suggests that 
+ the heap printing algorithm works as described; when delaySecs=3, it is able to start 
+ printing packets as soon as they are able to be printed.
+
+ I keep leading zeroes in the price and quantity so that the columns line up.
  -}
 
 quoteStart = C.pack "B6034" --Start of relevant packet messages
@@ -34,7 +41,7 @@ dataOffset = 42 --Distance from start of packet to data, also from wireshark
 delaySecs = 3 --max distance between packet time and quote accept time in seconds
 
 data Qp = Qp String String deriving (Eq, Ord) --quantity and price
-instance Show Qp where show (Qp q p) = q ++ "@" ++ p
+instance Show Qp where show (Qp q p) = q ++ "@" ++ p -- <qtyN>@<priceN>
 
 data Quote = Quote {
     issueCode :: String,
@@ -44,6 +51,8 @@ data Quote = Quote {
     acceptTime :: Word32
     } deriving (Eq, Ord)
 
+--shows the quote in the requested format
+--for some reason this method is way faster than using Printf
 instance Show Quote where
   show Quote{
     issueCode = issueCode,
@@ -55,13 +64,7 @@ instance Show Quote where
     where printAscQps (x1, x2, x3, x4, x5) = unwords $ map show [x1, x2, x3, x4, x5]
           printDescQps (x1, x2, x3, x4, x5) = unwords $ map show [x5, x4, x3, x2, x1]
 
-{-
---prints just the accept times; for checking correctness of -r 
-instance Show Quote where
-  show Quote{acceptTime = acceptTime} = show acceptTime
--}
-
---Extract quote from the body of a valid quote Packet
+--Get monad that extracts quote from the body of a valid quote Packet
 --We add in packtime from the pcap header
 getQuote :: Word32 -> Get Quote
 getQuote packtime = do
@@ -90,10 +93,11 @@ getQuote packtime = do
     asks = (ask1, ask2, ask3, ask4, ask5)
     }
 
+--turns a bytestring and pcap header into a quote if it's valid
 parsePacket :: PktHdr -> B.ByteString -> Maybe Quote
 parsePacket header bytes
   | packlen /= quotePacketSize = Nothing --packet must be the correct size
-  | B.take 5 body /= quoteStart = Nothing --packet must start with correct message
+  | B.take 5 body /= quoteStart = Nothing --Message must start with B6034
   | otherwise = Just $ runGet (getQuote packtime) (CL.fromStrict body) --fromStrict is O(1)
   where
     PktHdr{hdrCaptureLength = packlen, hdrSeconds = packtime} = header
@@ -101,15 +105,17 @@ parsePacket header bytes
 
 printUnsorted :: PktHdr -> B.ByteString -> IO ()
 printUnsorted hdr bytes = do
-  let packet = parsePacket hdr bytes 
-  forM_ packet print 
+  let packet = parsePacket hdr bytes --parse the next packet
+  forM_ packet print --print it
 
 type QuoteHeap = H.MinHeap (Word32, Word32, Quote) --(Accept Time, Pack Time, Quote)
 
 printSorted :: PcapHandle -> QuoteHeap -> IO ()
 printSorted handle qh = do
-  (hdr, bytes) <- nextBS handle
-  let packet = parsePacket hdr bytes
+  (hdr, bytes) <- nextBS handle --grab the next packet
+                                --must do this explicitly, as we are inserting into a heap
+                                --as opposed to the callback style of printUnsorted
+  let packet = parsePacket hdr bytes --parse it
       PktHdr{hdrSeconds = packtime} = hdr
   if B.null bytes then printRest qh --no more packets, print the whole heap
     else do
@@ -122,13 +128,13 @@ printSorted handle qh = do
 
 third (_, _, x3) = x3
 
-printRest :: QuoteHeap -> IO ()
 --prints the contents of the quoteheap
+printRest :: QuoteHeap -> IO ()
 printRest qh = mapM_ (print . third) $ H.toAscList qh
 
-printPred :: Word32 -> QuoteHeap -> IO QuoteHeap
 --pops and prints all packets in the heap recieved least 3 seconds earlier
 --should guarantee sorted order without needing all packets in memory
+printPred :: Word32 -> QuoteHeap -> IO QuoteHeap
 printPred packTime qh = do mapM_ (print . third) safeQuotes
                            return newHeap
                         where (safeQuotes, newHeap) = H.span safeToPrint qh
