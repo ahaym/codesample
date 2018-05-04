@@ -5,7 +5,6 @@ import Control.Monad
 import Data.Word
 import qualified Data.Heap as H
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy.Char8 as CL
 
@@ -33,11 +32,16 @@ import qualified Data.ByteString.Lazy.Char8 as CL
 
  I keep leading zeroes in the price and quantity so that the columns line up.
  -}
-
+quoteStart :: C.ByteString
 quoteStart = C.pack "B6034" --Start of relevant packet messages
+
+quotePacketSize :: Word32
 quotePacketSize = 257 --Length of quote packets, from wireshark
+
+dataOffset :: Int
 dataOffset = 42 --Distance from start of packet to data, also from wireshark
 
+delaySecs :: Word32
 delaySecs = 3 --max distance between packet time and quote accept time in seconds
 
 data Qp = Qp String String deriving (Eq, Ord) --quantity and price
@@ -55,12 +59,12 @@ data Quote = Quote {
 --for some reason this method is way faster than using Printf
 instance Show Quote where
   show Quote{
-    issueCode = issueCode,
-    bids = bids,
-    asks = asks,
-    pktTime = packtime,
-    acceptTime =  acceptTime
-} = unwords [show packtime, show acceptTime, issueCode, printDescQps bids, printAscQps asks]
+    issueCode = issueCode_,
+    bids = bids_,
+    asks = asks_,
+    pktTime = packtime_,
+    acceptTime =  acceptTime_
+} = unwords [show packtime_, show acceptTime_, issueCode_, printDescQps bids_, printAscQps asks_]
     where printAscQps (x1, x2, x3, x4, x5) = unwords $ map show [x1, x2, x3, x4, x5]
           printDescQps (x1, x2, x3, x4, x5) = unwords $ map show [x5, x4, x3, x2, x1]
 
@@ -70,7 +74,7 @@ getQuote :: Word32 -> Get Quote
 getQuote packtime = do
   let getPriceQuantity = (,) <$> getByteString 5 <*> getByteString 7 
   skip 5 --B6034
-  issueCode <- getByteString 12
+  issueCode_ <- getByteString 12
   skip 12 --3 + 2 + 7
 
   bids_ <- replicateM 5 getPriceQuantity
@@ -79,16 +83,16 @@ getQuote packtime = do
   
   skip 50
 
-  acceptTime <- getByteString 8
+  acceptTime_ <- getByteString 8
   
   let [bid1, bid2, bid3, bid4, bid5] = map unpackQp bids_
       [ask1, ask2, ask3, ask4, ask5] = map unpackQp asks_
       unpackQp (p, q) = Qp (C.unpack p) (C.unpack q)
 
   return Quote {
-    issueCode = C.unpack issueCode,
+    issueCode = C.unpack issueCode_,
     pktTime = packtime,
-    acceptTime = read (C.unpack acceptTime) :: Word32,
+    acceptTime = read (C.unpack acceptTime_) :: Word32,
     bids = (bid1, bid2, bid3, bid4, bid5),
     asks = (ask1, ask2, ask3, ask4, ask5)
     }
@@ -126,6 +130,7 @@ printSorted handle qh = do
               where newEntry = (atime, packtime, quote)
             Nothing -> printSorted handle newH
 
+third :: (a, b, c) -> c
 third (_, _, x3) = x3
 
 --prints the contents of the quoteheap
@@ -138,9 +143,10 @@ printPred :: Word32 -> QuoteHeap -> IO QuoteHeap
 printPred packTime qh = do mapM_ (print . third) safeQuotes
                            return newHeap
                         where (safeQuotes, newHeap) = H.span safeToPrint qh
-                              safeToPrint item = packTime - snd item > delaySecs
-                              snd (_, x2, _) = x2
+                              safeToPrint item = packTime - snd3 item > delaySecs
+                              snd3 (_, x2, _) = x2
 
+main :: IO ()
 main = do
   args <- getArgs
   let rflag = "-r" `elem` args
